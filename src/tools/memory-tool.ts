@@ -1,0 +1,289 @@
+/**
+ * Memory write tools — registers the LLM-callable memory_add, memory_replace,
+ * and memory_remove tools.
+ * See PLAN.md → "Hermes Source File Reference Map" for source lines.
+ */
+
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type, type TSchema } from "typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { MemoryStore } from "../store/memory-store.js";
+import { DatabaseManager } from "../store/db.js";
+import {
+  reconcileMarkdownFailureScopes,
+  reconcileMarkdownMemoryScope,
+} from "../store/sqlite-memory-store.js";
+import { MEMORY_TOOL_DESCRIPTION } from "../constants.js";
+import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
+import type { MemoryCategory, MemoryResult } from "../types.js";
+import { createSharedToolResultRenderer } from "./shared-output-view.js";
+import { memoryResultView } from "./tool-result-views.js";
+
+function appendSyncWarning(result: MemoryResult, warning: string): MemoryResult {
+  const warnings = [...(result.warnings ?? []), warning];
+  const message = result.message ? `${result.message} Warning: ${warning}` : warning;
+  return {
+    ...result,
+    message,
+    warning,
+    warnings,
+  } as MemoryResult;
+}
+
+function formatMemoryToolText(result: MemoryResult): string {
+  const evictedEntries = result.evicted_entries ?? [];
+  if (result.success && evictedEntries.length > 0) {
+    const lines = [
+      result.message ?? `Memory updated. Rotated ${evictedEntries.length} older ${evictedEntries.length === 1 ? "entry" : "entries"} to stay within the limit.`,
+      "",
+      "Rotated active memory entries:",
+      "",
+    ];
+
+    evictedEntries.forEach((entry, index) => {
+      lines.push(`${index + 1}. ${entry}`);
+      lines.push("");
+    });
+
+    lines.push("If one of these entries should stay active, add it again.");
+    if (result.usage) lines.push(`Usage: ${result.usage}`);
+    return lines.join("\n").trim();
+  }
+
+  return JSON.stringify(result);
+}
+
+function sqliteProjectFor(rawTarget: "memory" | "user" | "project" | "failure", projectName?: string | null): string | null | undefined {
+  if (rawTarget === "project") return projectName?.trim() || null;
+  if (rawTarget === "memory") return null;
+  if (rawTarget === "user") return null;
+  if (rawTarget === "failure") return null;
+  return undefined;
+}
+
+function sqliteTargetFor(rawTarget: "memory" | "user" | "project" | "failure"): "memory" | "user" | "failure" {
+  if (rawTarget === "project") return "memory";
+  return rawTarget;
+}
+
+async function reconcileStoreScope(
+  entries: string[],
+  rawTarget: "memory" | "user" | "project" | "failure",
+  dbManager: DatabaseManager | null,
+  projectName?: string | null,
+): Promise<string | null | undefined> {
+  if (!dbManager) return undefined;
+  try {
+    if (rawTarget === "failure") {
+      reconcileMarkdownFailureScopes(dbManager, entries);
+      return null;
+    }
+    const target = sqliteTargetFor(rawTarget);
+    reconcileMarkdownMemoryScope(
+      dbManager,
+      entries,
+      target,
+      sqliteProjectFor(rawTarget, projectName) ?? null,
+    );
+    return null;
+  } catch (err) {
+    return `Saved to Markdown, but SQLite search reconciliation failed: ${err instanceof Error ? err.message : String(err)}. Startup/full sync will repair the search mirror.`;
+  }
+}
+
+type MemoryAction = "add" | "replace" | "remove";
+
+type MemoryToolParams = {
+  target: "memory" | "user" | "project" | "failure";
+  content?: string;
+  old_text?: string;
+  category?: MemoryCategory;
+  failure_reason?: string;
+};
+export function registerMemoryTool(
+  pi: ExtensionAPI,
+  store: MemoryStore,
+  projectStore: ProjectStoreRef,
+  dbManager: DatabaseManager | null = null,
+  projectName: ProjectNameRef = null,
+): (candidate: MemoryStore | null) => void {
+  const reconciledStores = new WeakSet<MemoryStore>();
+  const attachMutationObserver = (candidate: MemoryStore | null, isProjectStore = false): void => {
+    if (!candidate || reconciledStores.has(candidate) || typeof candidate.setMutationObserver !== "function") return;
+    candidate.setMutationObserver((target, entries) =>
+      reconcileStoreScope(
+        entries,
+        isProjectStore && target === "memory" ? "project" : target,
+        dbManager,
+        resolveProjectName(projectName),
+      ),
+    );
+    reconciledStores.add(candidate);
+  };
+  const configureProjectStore = (candidate: MemoryStore | null): void => {
+    attachMutationObserver(candidate, true);
+  };
+  attachMutationObserver(store);
+  configureProjectStore(resolveProjectStore(projectStore));
+
+  if (typeof pi.on === "function") {
+    pi.on("tool_result", (event) => {
+      if (!event.toolName.startsWith("memory_")) return;
+      const details = event.details as { success?: unknown } | undefined;
+      if (details?.success === false) return { isError: true };
+    });
+  }
+
+  const executeAction = async (
+    action: MemoryAction,
+    params: MemoryToolParams,
+    signal?: AbortSignal,
+  ) => {
+    const { target: rawTarget, content, old_text, category, failure_reason } = params;
+    const target = rawTarget === "project" ? "memory" : rawTarget;
+    const activeProjectStore = resolveProjectStore(projectStore);
+    const activeProjectName = resolveProjectName(projectName);
+    const activeStore = rawTarget === "project" ? activeProjectStore : store;
+
+    if (rawTarget === "project" && !activeProjectStore) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            success: false,
+            error: "Project memory is not available (no project detected).",
+          }),
+        }],
+        details: {
+          success: false,
+          error: "Project memory is not available (no project detected).",
+        },
+      };
+    }
+
+    const store_ = activeStore!;
+    attachMutationObserver(store_);
+    let result: MemoryResult;
+    let syncWarning: string | null = null;
+    const syncHandled = reconciledStores.has(store_);
+
+    switch (action) {
+      case "add":
+        if (!content) {
+          throw new Error("Content is required for 'add' action.");
+        }
+        if (rawTarget === "failure") {
+          const memoryCategory = category ?? "failure";
+          result = await store_.addFailure(content, {
+            category: memoryCategory,
+            failureReason: failure_reason,
+          });
+
+        } else {
+          result = await store_.add(target, content, signal);
+
+        }
+        break;
+      case "replace":
+        if (!old_text) throw new Error("old_text is required for 'replace' action.");
+        if (!content) throw new Error("content is required for 'replace' action.");
+        result = await store_.replace(target, old_text, content);
+
+        break;
+      case "remove":
+        if (!old_text) throw new Error("old_text is required for 'remove' action.");
+        result = await store_.remove(target, old_text);
+
+        break;
+    }
+
+    if (result.success && !syncHandled && typeof store_.getRawEntriesForSync === "function") {
+      const reconciliationWarning = await reconcileStoreScope(store_.getRawEntriesForSync(target), rawTarget, dbManager, activeProjectName);
+      if (reconciliationWarning !== undefined) syncWarning = reconciliationWarning;
+    }
+
+    if (syncWarning && result.success) result = appendSyncWarning(result, syncWarning);
+    if (rawTarget === "project" && result.success) result = { ...result, target: "project" };
+
+    return {
+      content: [{ type: "text" as const, text: formatMemoryToolText(result) }],
+      details: result,
+    };
+  };
+
+  const commonDescription = `${MEMORY_TOOL_DESCRIPTION}
+
+This action-specific tool accepts only the parameters listed in its schema.`;
+
+  const registerActionTool = (
+    action: MemoryAction,
+    name: string,
+    label: string,
+    description: string,
+    parameters: TSchema,
+  ) => {
+    pi.registerTool({
+      name,
+      label,
+      description,
+      promptSnippet: `${label}: persistent memory that survives across sessions`,
+      promptGuidelines: [
+        "Use this tool proactively when the user corrects you, shares a preference, or reveals durable environment or project facts.",
+        "Do not use memory tools for temporary task state, TODO items, or session progress.",
+      ],
+      renderResult: createSharedToolResultRenderer(memoryResultView),
+      parameters,
+      async execute(_toolCallId, params, signal) {
+        return executeAction(action, params as MemoryToolParams, signal);
+      },
+    });
+  };
+
+  const target = StringEnum(["memory", "user", "project", "failure"] as const, {
+    description: "Memory scope. Use failure for failures, corrections, insights, and tool quirks.",
+  });
+  const category = StringEnum(["failure", "correction", "insight", "preference", "convention", "tool-quirk"] as const, {
+    description: "Category for failure memories.",
+  });
+
+  registerActionTool(
+    "add",
+    "memory_add",
+    "Memory Add",
+    `${commonDescription}
+
+Add one durable entry. The target and content fields are required.`,
+    Type.Object({
+      target,
+      content: Type.String({ description: "Entry content to save." }),
+      category: Type.Optional(category),
+      failure_reason: Type.Optional(Type.String({ description: "Why a failure occurred." })),
+    }),
+  );
+  registerActionTool(
+    "replace",
+    "memory_replace",
+    "Memory Replace",
+    `${commonDescription}
+
+Replace one existing entry. The target, old_text, and content fields are required.`,
+    Type.Object({
+      target,
+      old_text: Type.String({ description: "Substring identifying the entry to replace." }),
+      content: Type.String({ description: "Replacement entry content." }),
+    }),
+  );
+  registerActionTool(
+    "remove",
+    "memory_remove",
+    "Memory Remove",
+    `${commonDescription}
+
+Remove one existing entry. The target and old_text fields are required.`,
+    Type.Object({
+      target,
+      old_text: Type.String({ description: "Substring identifying the entry to remove." }),
+    }),
+  );
+  return configureProjectStore;
+}
