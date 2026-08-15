@@ -6,7 +6,7 @@
  * When those scripts are run from an installed package (e.g. after `pi install`),
  * fail with a clear message instead of `tsc: not found` / `tests/run-all.sh: not found`.
  *
- * @see https://github.com/mooreceipts/pi-hermes-obsidian-memory/issues/108
+ * @see https://github.com/the-matt-moo/pi-hermes-obsidian-memory/issues/108
  */
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const mode = process.argv[2];
-const REPO = "https://github.com/mooreceipts/pi-hermes-obsidian-memory";
+const REPO = "https://github.com/the-matt-moo/pi-hermes-obsidian-memory";
 
 function fail(message) {
   console.error(`\n[pi-hermes-obsidian-memory] ${message}`);

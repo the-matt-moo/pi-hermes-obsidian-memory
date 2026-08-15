@@ -55,7 +55,7 @@ npm rebuild better-sqlite3
 pi install npm:pi-hermes-obsidian-memory
 
 # From GitHub
-pi install git:github.com/mooreceipts/pi-hermes-obsidian-memory
+pi install git:github.com/the-matt-moo/pi-hermes-obsidian-memory
 
 # Local development (no install)
 pi -e /path/to/pi-hermes-obsidian-memory/src/index.ts
@@ -323,7 +323,7 @@ Standing instruction writes go through the same `scanContent()` injection/exfilt
 Development requires a full git checkout (the npm package omits tests and TypeScript config):
 
 ```bash
-git clone https://github.com/mooreceipts/pi-hermes-obsidian-memory.git
+git clone https://github.com/the-matt-moo/pi-hermes-obsidian-memory.git
 cd pi-hermes-obsidian-memory
 npm install
 npm run check    # TypeScript type checking
