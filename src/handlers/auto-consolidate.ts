@@ -186,6 +186,7 @@ export async function triggerConsolidation(
   directCtx: Pick<ExtensionContext, "model" | "modelRegistry"> | null = null,
   dbManager: DatabaseManager | null = null,
   projectName?: string | null,
+  notify?: (message: string) => void,
   deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion } = {},
 ): Promise<ConsolidationResult> {
   const entries = entriesForTarget(store, target);
@@ -265,7 +266,7 @@ export async function triggerConsolidation(
       signal,
       timeoutMs,
       retryWithoutOverrides: true,
-    }) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
+    }, undefined, notify) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
 
     if (result.code === 0) {
       return { consolidated: true };
@@ -363,6 +364,7 @@ export function registerConsolidateCommand(
           ctx,
           dbManager,
           activeProjectName,
+          ctx.ui.notify,
           deps,
         );
 

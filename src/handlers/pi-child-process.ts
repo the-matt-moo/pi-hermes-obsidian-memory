@@ -221,7 +221,7 @@ function isConfiguredExtensionOutsideRoots(candidate: string): boolean {
   return !isWithinRoot(candidate, AGENT_ROOT) && !isWithinRoot(candidate, EXTENSION_PACKAGE_ROOT);
 }
 
-function childExtensionPaths(config: ChildLlmConfig): string[] {
+function childExtensionPaths(config: ChildLlmConfig, notify?: (message: string) => void): string[] {
   const configured = config.childExtensionPaths ?? [];
   const candidates = [OWN_EXTENSION_PATH, ...configured, ...detectAuthAdapterExtensionPaths()];
   const seen = new Set<string>();
@@ -233,29 +233,29 @@ function childExtensionPaths(config: ChildLlmConfig): string[] {
     const isConfigured = configured.some((entry) => entry.trim() === trimmed);
     const resolved = resolve(trimmed);
     if (!existsSync(resolved)) {
-      if (isConfigured) console.warn("Ignoring configured childExtensionPaths entry because it does not exist.");
+      if (isConfigured) (notify ?? console.warn)("Ignoring configured childExtensionPaths entry because it does not exist.");
       continue;
     }
     let normalized: string;
     try {
       normalized = realpathSync(resolved);
     } catch {
-      if (isConfigured) console.warn("Ignoring configured childExtensionPaths entry because it cannot be resolved.");
+      if (isConfigured) (notify ?? console.warn)("Ignoring configured childExtensionPaths entry because it cannot be resolved.");
       continue;
     }
     try {
       if (!statSync(normalized).isFile()) {
-        if (isConfigured) console.warn("Ignoring configured childExtensionPaths entry because it is not a file.");
+        if (isConfigured) (notify ?? console.warn)("Ignoring configured childExtensionPaths entry because it is not a file.");
         continue;
       }
     } catch {
-      if (isConfigured) console.warn("Ignoring configured childExtensionPaths entry because it cannot be inspected.");
+      if (isConfigured) (notify ?? console.warn)("Ignoring configured childExtensionPaths entry because it cannot be inspected.");
       continue;
     }
     if (isConfigured
       && isConfiguredExtensionOutsideRoots(normalized)
       && !warnedOutside.has(normalized)) {
-      console.warn("Configured childExtensionPaths entry is outside the agent and extension roots; allowing it as trusted executable config.");
+      (notify ?? console.warn)("Configured childExtensionPaths entry is outside the agent and extension roots; allowing it as trusted executable config.");
       warnedOutside.add(normalized);
     }
     if (seen.has(normalized)) continue;
@@ -265,11 +265,11 @@ function childExtensionPaths(config: ChildLlmConfig): string[] {
   return paths;
 }
 
-function appendOwnExtensionArgs(args: string[], config: ChildLlmConfig): void {
+function appendOwnExtensionArgs(args: string[], config: ChildLlmConfig, notify?: (message: string) => void): void {
   // Skip all packages from settings.json (--no-extensions) — the subprocess
   // loads only Hermes and explicitly required provider adapters.
   args.push("--no-extensions");
-  for (const extensionPath of childExtensionPaths(config)) {
+  for (const extensionPath of childExtensionPaths(config, notify)) {
     args.push("-e", extensionPath);
   }
 }
@@ -278,6 +278,7 @@ export function buildChildPiPromptArgs(
   prompt: string,
   config: ChildLlmConfig,
   _argv: string[] = process.argv.slice(2),
+  notify?: (message: string) => void,
 ): string[] {
   const args = ["-p", "--no-session"];
   const model = normalizedModelOverride(config);
@@ -285,17 +286,17 @@ export function buildChildPiPromptArgs(
 
   if (model) args.push("--model", model);
   if (thinking) args.push("--thinking", thinking);
-  appendOwnExtensionArgs(args, config);
+  appendOwnExtensionArgs(args, config, notify);
   args.push(prompt);
 
   return args;
 }
 
-function basePromptArgs(prompt: string, config: ChildLlmConfig): string[] {
+function basePromptArgs(prompt: string, config: ChildLlmConfig, notify?: (message: string) => void): string[] {
   // Always use --no-extensions + own path so the retry also avoids loading
   // all settings.json packages — matching the primary code path.
   const args = ["-p", "--no-session"];
-  appendOwnExtensionArgs(args, config);
+  appendOwnExtensionArgs(args, config, notify);
   args.push(prompt);
   return args;
 }
@@ -435,6 +436,7 @@ export async function execChildPrompt(
   config: ChildLlmConfig,
   options: ExecChildPromptOptions,
   dependencies: ExecChildPromptDependencies = DEFAULT_EXEC_CHILD_PROMPT_DEPENDENCIES,
+  notify?: (message: string) => void,
 ): Promise<PiExecResult> {
   const execOptions = {
     timeout: options.timeoutMs + WATCHDOG_EXIT_GRACE_MS,
@@ -451,7 +453,7 @@ export async function execChildPrompt(
   try {
     try {
       const invocation = resolveWatchedChildPiInvocation(
-        resolveChildPiInvocation(buildChildPiPromptArgs(promptReference, config)),
+        resolveChildPiInvocation(buildChildPiPromptArgs(promptReference, config, undefined, notify)),
         options.timeoutMs,
         cancellationPath,
       );
@@ -475,7 +477,7 @@ export async function execChildPrompt(
     }
 
     const retryInvocation = resolveWatchedChildPiInvocation(
-      resolveChildPiInvocation(basePromptArgs(promptReference, config)),
+      resolveChildPiInvocation(basePromptArgs(promptReference, config, notify)),
       options.timeoutMs,
       cancellationPath,
     );

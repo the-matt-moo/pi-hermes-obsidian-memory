@@ -107,11 +107,12 @@ async function runSubprocessReview(
   prompt: string,
   config: MemoryConfig,
   execChild: typeof execChildPrompt,
+  notify?: (message: string) => void,
 ): Promise<{ code: number; stdout?: string }> {
   return execChild(pi, prompt, config, {
     signal: undefined,
     timeoutMs: 120000,
-  });
+  }, undefined, notify);
 }
 
 export function setupBackgroundReview(
@@ -232,15 +233,16 @@ export function setupBackgroundReview(
         }
       }
 
-      const subprocessResult = await runSubprocessReview(pi, subprocessPrompt, config, execChild);
+      const subprocessResult = await runSubprocessReview(pi, subprocessPrompt, config, execChild, ctx.ui.notify);
       if (subprocessResult.code === 0) {
         notifyIfSaved(shouldNotifySubprocess(subprocessResult.stdout));
       }
     };
 
     runReview()
-      .catch(() => {
-        // Best-effort only
+      .catch((err) => {
+        // Best-effort only, but surface the failure for diagnostics
+        ctx.ui.notify(`⚠️ Background memory review failed: ${err instanceof Error ? err.message : String(err)}`, "warning");
       })
       .finally(finishReview);
   });

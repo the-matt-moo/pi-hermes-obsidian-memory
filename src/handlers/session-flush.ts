@@ -66,7 +66,7 @@ export function setupSessionFlush(
 
   /** Shared flush logic — builds conversation snapshot and saves memories */
   async function flush(
-    ctx: Pick<ExtensionContext, "sessionManager" | "model" | "modelRegistry">,
+    ctx: Pick<ExtensionContext, "sessionManager" | "model" | "modelRegistry" | "ui">,
     signal?: AbortSignal,
     timeoutMs = 30000,
   ): Promise<void> {
@@ -116,7 +116,7 @@ export function setupSessionFlush(
       await execChildPrompt(pi, flushMessage, config, {
         signal,
         timeoutMs,
-      });
+      }, undefined, ctx.ui.notify);
     } catch {
       // Best-effort flush — never block shutdown
     }
@@ -133,6 +133,8 @@ export function setupSessionFlush(
     if (!config.flushOnShutdown) return;
     // Fire-and-forget with a short timeout so we don't block Pi's shutdown.
     // We intentionally do NOT await — Pi should not wait for the child process.
-    flush(ctx, undefined, 10000).catch(() => {});
+    flush(ctx, undefined, 10000).catch((err) => {
+      ctx.ui.notify(`⚠️ Session flush failed: ${err instanceof Error ? err.message : String(err)}`, "warning");
+    });
   });
 }

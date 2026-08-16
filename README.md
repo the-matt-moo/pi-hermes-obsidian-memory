@@ -318,6 +318,15 @@ Standing instruction writes go through the same `scanContent()` injection/exfilt
 - **Core memory limits still apply**: SQLite search mirroring does not bypass the 5,000-char Markdown limit.
 - **Project skill visibility**: Project skills are exposed via `resources_discover`. A new skill may not appear until the next session.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full history.
+
+### 0.9.5
+- `childExtensionPaths` config-validation warnings now route through `ctx.ui.notify` instead of `console.warn`.
+- Session-flush and background-review background-task errors are surfaced via `ctx.ui.notify` (previously swallowed by silent `.catch` blocks).
+- Path-traversal guard in `normalizeProjectsMemoryDir` (`paths.ts`) documented.
+
 ## Development
 
 Development requires a full git checkout (the npm package omits tests and TypeScript config):

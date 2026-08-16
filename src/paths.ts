@@ -100,6 +100,9 @@ export function normalizeProjectsMemoryDir(input: string): string | undefined {
   }
 
   const normalized = path.normalize(relative).replace(/^[\\/]+|[\\/]+$/g, "");
+  // Path-traversal guard: only a single non-dot, non-parent segment beneath
+  // AGENT_ROOT is accepted; isSafeRelativeDirectory() rejects ".", "..", and
+  // nested paths, so a configured value cannot escape the agent storage root.
   if (!isSafeRelativeDirectory(normalized)) return undefined;
   return normalized;
 }

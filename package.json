@@ -1,6 +1,6 @@
 {
   "name": "pi-hermes-obsidian-memory",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Persistent memory, session search, and secret scanning for Pi. Token-aware policy-only memory, SQLite FTS5 search, auto-consolidation, procedural skills. Inspired by pi-hermes-memory.",
   "type": "module",
   "main": "src/index.ts",
@@ -11,7 +11,8 @@
     "LICENSE",
     "docs/PUBLISHING.md",
     "docs/ROADMAP.md",
-    "SECURITY.md"
+    "SECURITY.md",
+    "CHANGELOG.md"
   ],
   "pi": {
     "extensions": [
